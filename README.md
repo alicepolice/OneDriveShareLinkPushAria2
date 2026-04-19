@@ -126,6 +126,56 @@ At this time, you need to use the download code for have password link, that is,
 
 Usage is similar to the above.
 
+Pass the URL and password as command line arguments:
+
+```bash
+# List files only
+python havepassword.py "your-onedrive-share-url" "your-password"
+
+# Download all files (set isDownload = True and downloadNum = "1-N" in the script first)
+python havepassword.py "your-onedrive-share-url" "your-password"
+```
+
+### Known issues and fixes on Linux
+
+**1. Browser closed unexpectedly (`BrowserError`)**
+
+On Linux servers, Chromium may crash on launch due to limited `/dev/shm`. The following flags are required:
+
+```python
+browser = await launch(options={'args': [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--ignore-certificate-errors',
+]})
+```
+
+**2. `urlopen` goes through system proxy (`BrowserError` / 503)**
+
+If `http_proxy` is set in your environment, Python's `urlopen` (used by pyppeteer to detect the browser's WebSocket endpoint) will route `localhost` requests through the proxy and get a 503. Fix by adding before the pyppeteer import:
+
+```python
+os.environ['no_proxy'] = 'localhost,127.0.0.1'
+```
+
+**3. Proxy drops connections during pagination (`ProxyError` / `RemoteDisconnected`)**
+
+When traversing large folders (>30 files per page), the proxy may drop connections mid-request. The `newSession()` function must mount retries for both `http://` and `https://`:
+
+```python
+def newSession():
+    s = requests.session()
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    return s
+```
+
+Pagination requests also need explicit retry/exception handling around `req.post(...)`.
+
 # Note
 
 Before you use it, clone the whole project with `git clone https://github.com/gaowanliang/OneDriveShareLinkPushAria2.git` to use it. havepassword.py depends on main.py, if you want to use the version that requires a password If you want to use a version that requires a password, you need to `pip install pyppeteer`

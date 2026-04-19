@@ -116,7 +116,55 @@ https://jia666-my.sharepoint.com/:f:/g/personal/1025_xkx_me/EsqNMFlDoyZKt-RGcsI1
 
 - OneDriveSharePwd：OneDrive 链接的密码
 
-使用方法与上面类似。
+通过命令行参数传入 URL 和密码：
+
+```bash
+# 仅列出文件
+python havepassword.py "你的-onedrive-分享链接" "密码"
+
+# 下载所有文件（先在脚本中设置 isDownload = True 和 downloadNum = "1-N"）
+python havepassword.py "你的-onedrive-分享链接" "密码"
+```
+
+### Linux 下的已知问题与修复
+
+**1. 浏览器意外关闭（`BrowserError`）**
+
+在 Linux 服务器上，Chromium 启动时可能因 `/dev/shm` 空间不足而崩溃。需要添加以下启动参数：
+
+```python
+browser = await launch(options={'args': [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--ignore-certificate-errors',
+]})
+```
+
+**2. `urlopen` 走系统代理导致 503（`BrowserError`）**
+
+若环境变量中设置了 `http_proxy`，pyppeteer 用于检测浏览器 WebSocket 端点的 `urlopen` 会把 `localhost` 请求转发给代理，返回 503。在 pyppeteer 导入前添加：
+
+```python
+os.environ['no_proxy'] = 'localhost,127.0.0.1'
+```
+
+**3. 代理在分页请求中断连（`ProxyError` / `RemoteDisconnected`）**
+
+遍历大文件夹（每页超过 30 个文件）时，代理可能中途断开连接。`newSession()` 需要同时为 `http://` 和 `https://` 挂载重试：
+
+```python
+def newSession():
+    s = requests.session()
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    return s
+```
+
+分页循环中的 `req.post(...)` 也需要加异常捕获和重试逻辑。
 
 # 注意
 

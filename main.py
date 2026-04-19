@@ -51,8 +51,10 @@ header = {
 
 def newSession():
     s = requests.session()
-    retries = Retry(total=5, backoff_factor=0.1)
-    s.mount("http://", HTTPAdapter(max_retries=retries))
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
     return s
 
 
@@ -168,15 +170,29 @@ def getFiles(originalPath, req, layers, _id=0):
                 "NextHref"
             ] + "&@a1=%s&TryNewExperienceSingle=TRUE" % ("%27" + relativeUrl + "%27")
             filesData.extend(graphqlReq["ListData"]["Row"])
-            graphqlReq = req.post(
-                "/".join(redirectSplitURL[:-3])
-                + "/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream"
-                + nextHref,
-                data=renderListDataAsStreamVar.encode("utf-8"),
-                headers=tempHeader,
-            )
+            for _retry in range(3):
+                try:
+                    graphqlReq = req.post(
+                        "/".join(redirectSplitURL[:-3])
+                        + "/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream"
+                        + nextHref,
+                        data=renderListDataAsStreamVar.encode("utf-8"),
+                        headers=tempHeader,
+                    )
+                    if graphqlReq.text.strip():
+                        break
+                    print(f"分页请求返回空响应 (状态码 {graphqlReq.status_code})，重试 {_retry+1}/3...")
+                except Exception as e:
+                    print(f"分页请求异常: {e}，重试 {_retry+1}/3...")
+                    if _retry == 2:
+                        raise
+                import time; time.sleep(3)
             # print(graphqlReq.text)
-            graphqlReq = json.loads(graphqlReq.text)
+            try:
+                graphqlReq = json.loads(graphqlReq.text)
+            except Exception:
+                print(f"分页JSON解析失败，状态码: {graphqlReq.status_code}，响应内容: {graphqlReq.text[:500]}")
+                raise
             # print(graphqlReq)
         filesData.extend(graphqlReq["ListData"]["Row"])
     else:
@@ -361,15 +377,29 @@ def downloadFiles(
                 "NextHref"
             ] + "&@a1=%s&TryNewExperienceSingle=TRUE" % ("%27" + relativeUrl + "%27")
             filesData.extend(graphqlReq["ListData"]["Row"])
-            graphqlReq = req.post(
-                "/".join(redirectSplitURL[:-3])
-                + "/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream"
-                + nextHref,
-                data=renderListDataAsStreamVar.encode("utf-8"),
-                headers=tempHeader,
-            )
+            for _retry in range(3):
+                try:
+                    graphqlReq = req.post(
+                        "/".join(redirectSplitURL[:-3])
+                        + "/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream"
+                        + nextHref,
+                        data=renderListDataAsStreamVar.encode("utf-8"),
+                        headers=tempHeader,
+                    )
+                    if graphqlReq.text.strip():
+                        break
+                    print(f"分页请求返回空响应 (状态码 {graphqlReq.status_code})，重试 {_retry+1}/3...")
+                except Exception as e:
+                    print(f"分页请求异常: {e}，重试 {_retry+1}/3...")
+                    if _retry == 2:
+                        raise
+                import time; time.sleep(3)
             # print(graphqlReq.text)
-            graphqlReq = json.loads(graphqlReq.text)
+            try:
+                graphqlReq = json.loads(graphqlReq.text)
+            except Exception:
+                print(f"分页JSON解析失败，状态码: {graphqlReq.status_code}，响应内容: {graphqlReq.text[:500]}")
+                raise
             # print(graphqlReq)
         filesData.extend(graphqlReq["ListData"]["Row"])
     else:
@@ -420,29 +450,37 @@ def downloadFiles(
             fileCount += 1
             # print(num)
             if num == [0] or (isinstance(num, list) and fileCount in num):
-                print(
-                    "\t" * layers,
-                    "File(文件) [%d]: %s\tUnique ID: %s\tPushing(正在推送)"
-                    % (fileCount, i["FileLeafRef"], i["UniqueId"]),
-                )
-                cc = downloadURL + (i["UniqueId"][1:-1].lower())
-                dd = dict(
-                    out=i["FileLeafRef"],
-                    header=headerStr,
-                    dir=originalDir + str(query["id"]).split("Documents", 1)[1],
-                )
-                jsonreq = json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": "qwer",
-                        "method": "aria2.addUri",
-                        "params": ["token:" + token, [cc], dd],
-                    }
-                )
-                # print(jsonreq)
-                c = requests.post(aria2URL, data=jsonreq)
-                pprint(json.loads(c.text))
-                # exit(0)
+                fileDir = originalDir + str(query["id"]).split("Documents", 1)[1]
+                filePath = os.path.join(fileDir, i["FileLeafRef"])
+                if os.path.exists(filePath):
+                    print(
+                        "\t" * layers,
+                        "File(文件) [%d]: %s\tSkipping(已存在，跳过)"
+                        % (fileCount, i["FileLeafRef"]),
+                    )
+                else:
+                    print(
+                        "\t" * layers,
+                        "File(文件) [%d]: %s\tUnique ID: %s\tPushing(正在推送)"
+                        % (fileCount, i["FileLeafRef"], i["UniqueId"]),
+                    )
+                    cc = downloadURL + (i["UniqueId"][1:-1].lower())
+                    dd = dict(
+                        out=i["FileLeafRef"],
+                        header=headerStr,
+                        dir=fileDir,
+                    )
+                    jsonreq = json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": "qwer",
+                            "method": "aria2.addUri",
+                            "params": ["token:" + token, [cc], dd],
+                        }
+                    )
+                    # print(jsonreq)
+                    c = requests.post(aria2URL, data=jsonreq)
+                    pprint(json.loads(c.text))
             else:
                 print(
                     "\t" * layers,
